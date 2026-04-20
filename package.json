@@ -1,0 +1,42 @@
+{
+  "$schema": "https://raw.githubusercontent.com/vicinaehq/vicinae/refs/heads/main/extra/schemas/extension.json",
+  "name": "pi-chat",
+  "title": "Pi",
+  "description": "Chat with the pi coding agent",
+  "categories": ["Developer Tools", "Productivity"],
+  "license": "MIT",
+  "author": "purplefish32",
+  "contributors": [],
+  "pastContributors": [],
+  "icon": "icon.png",
+  "commands": [
+    {
+      "name": "pi-chat",
+      "title": "Chat with Pi",
+      "description": "Start a conversation with the pi coding agent",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "workingDirectory",
+      "title": "Working Directory",
+      "description": "The directory pi operates in (defaults to your home directory)",
+      "type": "textfield",
+      "required": false,
+      "default": ""
+    }
+  ],
+  "dependencies": {
+    "@vicinae/api": "^0.20.13"
+  },
+  "scripts": {
+    "build": "vici build",
+    "dev": "vici develop"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "typescript": "^5.9.0"
+  }
+}

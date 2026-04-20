@@ -1,0 +1,4 @@
+node_modules/
+pi-chat.js
+vicinae-env.d.ts
+*.js.map
