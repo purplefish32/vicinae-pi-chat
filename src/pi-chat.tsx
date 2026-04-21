@@ -208,7 +208,8 @@ function setSubtitle(text: string) {
 }
 
 function loadMessagesFromRpc(
-  rawMessages: Record<string, unknown>[]
+  rawMessages: Record<string, unknown>[],
+  limit = 30
 ): Message[] {
   const result: Message[] = [];
   let idx = 0;
@@ -249,7 +250,8 @@ function loadMessagesFromRpc(
     }
   }
 
-  return result;
+  // Return only the last N messages so we don't overwhelm the UI
+  return result.slice(-limit);
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
@@ -310,11 +312,13 @@ export default function PiChat(props: LaunchProps) {
         return client.getMessages();
       })
       .then((res) => {
-        const data = res.data as Record<string, unknown>;
-        const raw = (data?.messages as Record<string, unknown>[]) ?? [];
-        const loaded = loadMessagesFromRpc(raw);
-        if (loaded.length > 0) {
-          setMessages(loaded);
+        try {
+          const data = res.data as Record<string, unknown>;
+          const raw = (data?.messages as Record<string, unknown>[]) ?? [];
+          const loaded = loadMessagesFromRpc(raw);
+          if (loaded.length > 0) setMessages(loaded);
+        } catch {
+          // Malformed session — start fresh
         }
         setPiReady(true);
       })
