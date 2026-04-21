@@ -59,11 +59,36 @@ const THINKING_ICONS: Record<ThinkingLevel, string> = {
   high: "🧠🧠🧠",
 };
 
+// ── Message parsing helpers ───────────────────────────────────────────────────
+
+function extractUserText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((c: Record<string, unknown>) => c.type === "text")
+      .map((c: Record<string, unknown>) => c.text as string)
+      .join("\n\n");
+  }
+  return String(content ?? "");
+}
+
+function extractAssistantText(content: unknown[]): string {
+  return content
+    .filter((c: Record<string, unknown>) => c.type === "text")
+    .map((c: Record<string, unknown>) => c.text as string)
+    .join("\n\n");
+}
+
+function extractToolCallNames(content: unknown[]): string[] {
+  return content
+    .filter((c: Record<string, unknown>) => c.type === "toolCall")
+    .map((c: Record<string, unknown>) => c.name as string);
+}
 
 // ── RPC Client ────────────────────────────────────────────────────────────────
 
 function createPiClient(cwd: string) {
-  const proc: ChildProcess = spawn("pi", ["--mode", "rpc", "--continue"], {
+  const proc: ChildProcess = spawn("pi", ["--mode", "rpc"], {
     cwd,
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -146,7 +171,7 @@ function createPiClient(cwd: string) {
     prompt: (message: string) => sendCommand({ type: "prompt", message }),
     abort: () => sendCommand({ type: "abort" }),
     newSession: () => sendCommand({ type: "new_session" }),
-    getLastAssistantText: () => sendCommand({ type: "get_last_assistant_text" }),
+    getMessages: () => sendCommand({ type: "get_messages" }),
     getAvailableModels: () => sendCommand({ type: "get_available_models" }),
     setModel: (provider: string, modelId: string) =>
       sendCommand({ type: "set_model", provider, modelId }),
@@ -180,6 +205,51 @@ function createPiClient(cwd: string) {
 
 function setSubtitle(text: string) {
   updateCommandMetadata({ subtitle: text }).catch(() => {});
+}
+
+function loadMessagesFromRpc(
+  rawMessages: Record<string, unknown>[]
+): Message[] {
+  const result: Message[] = [];
+  let idx = 0;
+
+  for (const msg of rawMessages) {
+    const role = msg.role as string;
+    if (role === "user") {
+      const text = extractUserText(msg.content);
+      if (text.trim()) {
+        result.push({
+          id: `loaded-${idx++}`,
+          role: "user",
+          content: text,
+          timestamp: (msg.timestamp as number) ?? Date.now(),
+        });
+      }
+    } else if (role === "assistant") {
+      const content = msg.content as Record<string, unknown>[];
+      const text = extractAssistantText(content);
+      const toolCalls = extractToolCallNames(content);
+      const usage = msg.usage as Record<string, unknown> | undefined;
+      const cost = usage?.cost as Record<string, unknown> | undefined;
+
+      if (text.trim() || toolCalls.length > 0) {
+        result.push({
+          id: `loaded-${idx++}`,
+          role: "assistant",
+          content: text,
+          toolCalls,
+          model: msg.model as string | undefined,
+          tokens: usage
+            ? ((usage.input as number) ?? 0) + ((usage.output as number) ?? 0)
+            : undefined,
+          cost: cost?.total as number | undefined,
+          timestamp: (msg.timestamp as number) ?? Date.now(),
+        });
+      }
+    }
+  }
+
+  return result;
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
@@ -237,24 +307,13 @@ export default function PiChat(props: LaunchProps) {
       .then((res) => {
         const data = res.data as Record<string, unknown>;
         setAvailableModels((data?.models as Model[]) ?? []);
-        return client.getLastAssistantText();
+        return client.getMessages();
       })
       .then((res) => {
-        try {
-          const text = (res.data as Record<string, unknown>)?.text as string | null;
-          if (text?.trim()) {
-            setMessages([
-              {
-                id: "restored-assistant",
-                role: "assistant",
-                content: text,
-                timestamp: Date.now(),
-              },
-            ]);
-          }
-        } catch {
-          // ignore
-        }
+        const data = res.data as Record<string, unknown>;
+        const raw = (data?.messages as Record<string, unknown>[]) ?? [];
+        const loaded = loadMessagesFromRpc(raw);
+        if (loaded.length > 0) setMessages(loaded);
         setPiReady(true);
       })
       .catch(() => {
@@ -718,7 +777,6 @@ export default function PiChat(props: LaunchProps) {
       filtering={false}
       searchText={searchText}
       onSearchTextChange={setSearchText}
-      onSelectionChange={(id) => { if (id && id !== "send-prompt") setSelectedId(id); }}
       searchBarPlaceholder={
         isStreaming
           ? activeToolCalls.length > 0
