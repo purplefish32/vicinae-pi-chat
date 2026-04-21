@@ -268,6 +268,7 @@ export default function PiChat(props: LaunchProps) {
   const [currentModel, setCurrentModel] = useState<Model | null>(null);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("off");
   const [sessionStats, setSessionStats] = useState<SessionStats | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const clientRef = useRef<ReturnType<typeof createPiClient> | null>(null);
   const streamingIdRef = useRef<string | null>(null);
@@ -313,7 +314,10 @@ export default function PiChat(props: LaunchProps) {
         const data = res.data as Record<string, unknown>;
         const raw = (data?.messages as Record<string, unknown>[]) ?? [];
         const loaded = loadMessagesFromRpc(raw);
-        if (loaded.length > 0) setMessages(loaded);
+        if (loaded.length > 0) {
+          setMessages(loaded);
+          setSelectedId(loaded[loaded.length - 1].id);
+        }
         setPiReady(true);
       })
       .catch(() => {
@@ -504,6 +508,7 @@ export default function PiChat(props: LaunchProps) {
       ]);
       setSearchText("");
       setIsStreaming(true);
+      setSelectedId(assistantId);
       setSubtitle("streaming…");
 
       clientRef.current.prompt(msg);
@@ -777,6 +782,8 @@ export default function PiChat(props: LaunchProps) {
       filtering={false}
       searchText={searchText}
       onSearchTextChange={setSearchText}
+      selectedItemId={selectedId ?? undefined}
+      onSelectionChange={(id) => { if (id && id !== "send-prompt") setSelectedId(id); }}
       searchBarPlaceholder={
         isStreaming
           ? activeToolCalls.length > 0
