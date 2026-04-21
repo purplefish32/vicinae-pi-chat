@@ -268,7 +268,6 @@ export default function PiChat(props: LaunchProps) {
   const [currentModel, setCurrentModel] = useState<Model | null>(null);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("off");
   const [sessionStats, setSessionStats] = useState<SessionStats | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const clientRef = useRef<ReturnType<typeof createPiClient> | null>(null);
   const streamingIdRef = useRef<string | null>(null);
@@ -316,7 +315,6 @@ export default function PiChat(props: LaunchProps) {
         const loaded = loadMessagesFromRpc(raw);
         if (loaded.length > 0) {
           setMessages(loaded);
-          setSelectedId(loaded[loaded.length - 1].id);
         }
         setPiReady(true);
       })
@@ -508,7 +506,6 @@ export default function PiChat(props: LaunchProps) {
       ]);
       setSearchText("");
       setIsStreaming(true);
-      setSelectedId(assistantId);
       setSubtitle("streaming…");
 
       clientRef.current.prompt(msg);
@@ -782,7 +779,6 @@ export default function PiChat(props: LaunchProps) {
       filtering={false}
       searchText={searchText}
       onSearchTextChange={setSearchText}
-      selectedItemId={selectedId ?? undefined}
       onSelectionChange={(id) => { if (id && id !== "send-prompt") setSelectedId(id); }}
       searchBarPlaceholder={
         isStreaming
@@ -849,8 +845,8 @@ export default function PiChat(props: LaunchProps) {
         />
       )}
 
-      {/* ── Message list ── */}
-      {messages.map((msg) => {
+      {/* ── Message list — newest first ── */}
+      {[...messages].reverse().map((msg) => {
         const isUser = msg.role === "user";
         const isThisStreaming = msg.isStreaming;
         const hasTools = (msg.toolCalls?.length ?? 0) > 0;
