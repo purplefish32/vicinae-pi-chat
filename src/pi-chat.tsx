@@ -290,7 +290,7 @@ export default function PiChat(props: LaunchProps) {
     setCrashed(null);
     setPiReady(false);
 
-    // Handshake: get_state → get_available_models → get_messages
+    // Handshake: get_state → get_available_models
     client
       .getState()
       .then((res) => {
@@ -307,13 +307,6 @@ export default function PiChat(props: LaunchProps) {
       .then((res) => {
         const data = res.data as Record<string, unknown>;
         setAvailableModels((data?.models as Model[]) ?? []);
-        return client.getMessages();
-      })
-      .then((res) => {
-        const data = res.data as Record<string, unknown>;
-        const raw = (data?.messages as Record<string, unknown>[]) ?? [];
-        const loaded = loadMessagesFromRpc(raw);
-        if (loaded.length > 0) setMessages(loaded);
         setPiReady(true);
       })
       .catch(() => {
