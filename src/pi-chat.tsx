@@ -784,8 +784,8 @@ export default function PiChat(props: LaunchProps) {
         />
       )}
 
-      {/* ── Message list — newest first ── */}
-      {[...messages].reverse().map((msg) => {
+      {/* ── Message list ── */}
+      {messages.map((msg) => {
         const isUser = msg.role === "user";
         const isThisStreaming = msg.isStreaming;
         const hasTools = (msg.toolCalls?.length ?? 0) > 0;
