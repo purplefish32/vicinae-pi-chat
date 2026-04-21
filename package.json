@@ -12,7 +12,7 @@
   "commands": [
     {
       "name": "pi-chat",
-      "title": "Chat",
+      "title": "Chat with Pi",
       "description": "Start a conversation with the pi coding agent",
       "mode": "view",
       "keywords": ["pi", "ai", "chat", "ask", "code"]
