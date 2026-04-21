@@ -12,6 +12,7 @@ import {
   updateCommandMetadata,
   LaunchProps,
   LocalStorage,
+  environment,
 } from "@vicinae/api";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { spawn, ChildProcess, execSync } from "child_process";
@@ -88,8 +89,9 @@ function extractToolCallNames(content: unknown[]): string[] {
 
 // ── RPC Client ────────────────────────────────────────────────────────────────
 
-function createPiClient(cwd: string) {
-  const proc: ChildProcess = spawn("pi", ["--mode", "rpc", "--continue"], {
+function createPiClient(cwd: string, continueSession: boolean) {
+  const args = ["--mode", "rpc", continueSession ? "--continue" : "--no-session"];
+  const proc: ChildProcess = spawn("pi", args, {
     cwd,
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -301,6 +303,8 @@ export default function PiChat(props: LaunchProps) {
 
   // ── Bootstrap ──────────────────────────────────────────────────────────────
 
+  const continueSession = environment.commandName !== "new-chat";
+
   const startClient = useCallback(() => {
     if (!fs.existsSync(cwd)) {
       showToast({
@@ -311,7 +315,7 @@ export default function PiChat(props: LaunchProps) {
       return;
     }
 
-    const client = createPiClient(cwd);
+    const client = createPiClient(cwd, continueSession);
     clientRef.current = client;
     setCrashed(null);
     setPiReady(false);
@@ -480,17 +484,23 @@ export default function PiChat(props: LaunchProps) {
       return;
     }
 
-    // Restore persisted messages + session name + subtitle
-    loadStoredMessages().then(({ messages, sessionName: storedName }) => {
-      if (messages.length > 0) setMessages(messages);
-      if (storedName) {
-        setSessionName(storedName);
-        sessionNameRef.current = storedName;
-        setSubtitle(`"${storedName}" · Continue conversation`);
-      } else {
-        setSubtitle("Continue conversation");
-      }
-    });
+    // Restore or clear persisted state depending on command
+    if (!continueSession) {
+      LocalStorage.removeItem(STORAGE_MESSAGES_KEY).catch(() => {});
+      LocalStorage.removeItem(STORAGE_SESSION_NAME_KEY).catch(() => {});
+      setSubtitle("New conversation");
+    } else {
+      loadStoredMessages().then(({ messages, sessionName: storedName }) => {
+        if (messages.length > 0) setMessages(messages);
+        if (storedName) {
+          setSessionName(storedName);
+          sessionNameRef.current = storedName;
+          setSubtitle(`"${storedName}" · Continue conversation`);
+        } else {
+          setSubtitle("Continue conversation");
+        }
+      });
+    }
 
     startClient();
 
