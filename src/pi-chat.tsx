@@ -12,7 +12,7 @@ import {
   updateCommandMetadata,
   LaunchProps,
 } from "@vicinae/api";
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { spawn, ChildProcess, execSync } from "child_process";
 import { StringDecoder } from "string_decoder";
 import * as os from "os";
@@ -182,7 +182,6 @@ function createPiClient(cwd: string) {
     compact: () => sendCommand({ type: "compact" }),
     getForkMessages: () => sendCommand({ type: "get_fork_messages" }),
     fork: (entryId: string) => sendCommand({ type: "fork", entryId }),
-    setSessionName: (name: string) => sendCommand({ type: "set_session_name", name }),
     onEvent: (cb: (event: Record<string, unknown>) => void) => {
       eventListeners.push(cb);
       return () => {
@@ -269,7 +268,6 @@ export default function PiChat(props: LaunchProps) {
   const [currentModel, setCurrentModel] = useState<Model | null>(null);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("off");
   const [sessionStats, setSessionStats] = useState<SessionStats | null>(null);
-  const [sessionName, setSessionName] = useState<string | null>(null);
 
   const clientRef = useRef<ReturnType<typeof createPiClient> | null>(null);
   const streamingIdRef = useRef<string | null>(null);
@@ -304,8 +302,6 @@ export default function PiChat(props: LaunchProps) {
           setSubtitle(model.name);
         }
         if (level) setThinkingLevel(level);
-        const name = data?.sessionName as string | undefined;
-        if (name) setSessionName(name);
         return client.getAvailableModels();
       })
       .then((res) => {
@@ -408,7 +404,6 @@ export default function PiChat(props: LaunchProps) {
           const stats = res.data as unknown as SessionStats;
           setSessionStats(stats);
           const label = [
-            sessionName ? `"${sessionName}"` : null,
             currentModel?.name ?? modelName,
             stats.cost !== undefined ? `$${stats.cost.toFixed(4)}` : null,
             stats.contextUsage
@@ -511,12 +506,6 @@ export default function PiChat(props: LaunchProps) {
       setIsStreaming(true);
       setSubtitle("streaming…");
 
-      // Auto-name session from first message
-      if (messages.length === 0 && !sessionName) {
-        const name = msg.length > 40 ? msg.slice(0, 37) + "…" : msg;
-        clientRef.current.setSessionName(name).then(() => setSessionName(name)).catch(() => {});
-      }
-
       clientRef.current.prompt(msg);
     },
     [searchText, piReady, isStreaming]
@@ -600,7 +589,6 @@ export default function PiChat(props: LaunchProps) {
       setIsStreaming(false);
       setActiveToolCalls([]);
       setSessionStats(null);
-      setSessionName(null);
       setSubtitle(currentModel?.name ?? "Pi");
       showToast({ style: Toast.Style.Success, title: "New session started" });
     } catch {
@@ -696,7 +684,7 @@ export default function PiChat(props: LaunchProps) {
 
   // ── Shared action panel sections ──────────────────────────────────────────
 
-  const modelSection = useMemo(() => availableModels.length > 0 && (
+  const modelSection = availableModels.length > 0 && (
     <ActionPanel.Section title="Switch Model">
       {availableModels.map((m) => (
         <Action
@@ -711,9 +699,9 @@ export default function PiChat(props: LaunchProps) {
         />
       ))}
     </ActionPanel.Section>
-  ), [availableModels, currentModel, handleSwitchModel]);
+  );
 
-  const sessionSection = useMemo(() => (
+  const sessionSection = (
     <ActionPanel.Section title="Session">
       <Action
         title={`Thinking: ${thinkingLevel} ${THINKING_ICONS[thinkingLevel]}`}
@@ -755,101 +743,9 @@ export default function PiChat(props: LaunchProps) {
         shortcut={{ modifiers: ["cmd", "shift"], key: "delete" }}
       />
     </ActionPanel.Section>
-  ), [thinkingLevel, contextWarning, contextPercent, handleCycleThinking, handleCompact, handleAskClipboard, handleNewSession, isStreaming, abortStreaming]);
+  );
 
   // ── Crash screen ──────────────────────────────────────────────────────────
-
-  const messageItems = useMemo(() => messages.map((msg) => {
-    const isUser = msg.role === "user";
-    const isThisStreaming = msg.isStreaming;
-    const hasTools = (msg.toolCalls?.length ?? 0) > 0;
-    const rawContent = msg.content || (isThisStreaming ? "thinking…" : "");
-    const title = rawContent.length > 80 ? rawContent.slice(0, 77) + "…" : rawContent;
-
-    let subtitle = "";
-    if (isThisStreaming && activeToolCalls.length > 0) {
-      subtitle = `🔧 ${activeToolCalls.join(", ")}`;
-    } else if (isThisStreaming) {
-      subtitle = "●●●";
-    } else if (hasTools && !isUser) {
-      subtitle = msg.toolCalls!.join(", ");
-    }
-
-    const accessories = isUser
-      ? [{ tag: { value: "You", color: Color.Blue } }]
-      : isThisStreaming
-      ? [{ tag: { value: "●●●", color: Color.Green } }]
-      : [
-          ...(msg.cost !== undefined ? [{ tag: { value: `$${msg.cost.toFixed(4)}`, color: Color.SecondaryText } }] : []),
-          { tag: { value: "Pi", color: Color.Purple } },
-        ];
-
-    const detailMarkdown = isUser
-      ? `**You**\n\n---\n\n${msg.content}`
-      : msg.content || (isThisStreaming ? "_thinking…_" : "");
-
-    const detailMetadata = !isUser && !isThisStreaming ? (
-      <List.Item.Detail.Metadata>
-        {msg.model && <List.Item.Detail.Metadata.Label title="Model" text={msg.model} />}
-        {msg.tokens !== undefined && <List.Item.Detail.Metadata.Label title="Tokens" text={msg.tokens.toLocaleString()} />}
-        {msg.cost !== undefined && <List.Item.Detail.Metadata.Label title="Cost" text={`$${msg.cost.toFixed(5)}`} />}
-        {hasTools && <>
-          <List.Item.Detail.Metadata.Separator />
-          <List.Item.Detail.Metadata.Label title="Tools used" text={msg.toolCalls!.join(", ")} />
-        </>}
-        {sessionStats?.contextUsage && <>
-          <List.Item.Detail.Metadata.Separator />
-          <List.Item.Detail.Metadata.Label title="Context window" text={`${sessionStats.contextUsage.percent}% used`} />
-          <List.Item.Detail.Metadata.Label title="Session cost" text={`$${sessionStats.cost.toFixed(4)}`} />
-        </>}
-      </List.Item.Detail.Metadata>
-    ) : undefined;
-
-    return (
-      <List.Item
-        key={msg.id}
-        id={msg.id}
-        icon={
-          isUser
-            ? { source: Icon.Person, tintColor: Color.Blue }
-            : isThisStreaming
-            ? { source: Icon.CircleProgress, tintColor: Color.Green }
-            : { source: Icon.SpeechBubble, tintColor: Color.Purple }
-        }
-        title={title}
-        subtitle={subtitle}
-        accessories={accessories}
-        detail={<List.Item.Detail markdown={detailMarkdown} metadata={detailMetadata} />}
-        actions={
-          <ActionPanel>
-            <ActionPanel.Section title="Message">
-              <Action
-                title={isStreaming ? "Abort" : "Send Message"}
-                icon={isStreaming ? Icon.XMarkCircle : Icon.ArrowRight}
-                onAction={isStreaming ? abortStreaming : sendMessage}
-              />
-              <Action.CopyToClipboard
-                title="Copy Message"
-                content={msg.content}
-                shortcut={{ modifiers: ["cmd", "shift"], key: "c" }}
-              />
-              {isUser && (
-                <Action
-                  title="Fork — Edit & Retry"
-                  icon={Icon.ArrowNe}
-                  onAction={() => handleFork(msg)}
-                  shortcut={{ modifiers: ["cmd"], key: "f" }}
-                />
-              )}
-            </ActionPanel.Section>
-            {modelSection}
-            {sessionSection}
-          </ActionPanel>
-        }
-      />
-    );
-  }), [messages, isStreaming, activeToolCalls, sessionStats, modelSection, sessionSection, handleFork, sendMessage, abortStreaming]);
-
 
   if (crashed) {
     return (
@@ -886,7 +782,7 @@ export default function PiChat(props: LaunchProps) {
           ? activeToolCalls.length > 0
             ? `🔧 Running: ${activeToolCalls.join(", ")}…`
             : "Pi is thinking…"
-          : "Ask pi anything… (↵ to send)"
+          : statusLine
       }
     >
       {/* ── Send / Abort item — always first when typing ── */}
@@ -907,7 +803,7 @@ export default function PiChat(props: LaunchProps) {
               },
             },
           ]}
-          detail={<List.Item.Detail markdown="_Type your message in the search bar above_" />}
+          detail={<List.Item.Detail markdown={`**You:** ${searchText}`} />}
           actions={
             <ActionPanel>
               <Action
@@ -947,7 +843,141 @@ export default function PiChat(props: LaunchProps) {
       )}
 
       {/* ── Message list ── */}
-      {messageItems}
+      {messages.map((msg) => {
+        const isUser = msg.role === "user";
+        const isThisStreaming = msg.isStreaming;
+        const hasTools = (msg.toolCalls?.length ?? 0) > 0;
+
+        const rawContent = msg.content || (isThisStreaming ? "thinking…" : "");
+        const title =
+          rawContent.length > 80 ? rawContent.slice(0, 77) + "…" : rawContent;
+
+        let subtitle = "";
+        if (isThisStreaming && activeToolCalls.length > 0) {
+          subtitle = `🔧 ${activeToolCalls.join(", ")}`;
+        } else if (isThisStreaming) {
+          subtitle = "●●●";
+        } else if (hasTools && !isUser) {
+          subtitle = msg.toolCalls!.join(", ");
+        }
+
+        const accessories = isUser
+          ? [{ tag: { value: "You", color: Color.Blue } }]
+          : isThisStreaming
+          ? [{ tag: { value: "●●●", color: Color.Green } }]
+          : [
+              ...(msg.cost !== undefined
+                ? [
+                    {
+                      tag: {
+                        value: `$${msg.cost.toFixed(4)}`,
+                        color: Color.SecondaryText,
+                      },
+                    },
+                  ]
+                : []),
+              { tag: { value: "Pi", color: Color.Purple } },
+            ];
+
+        const detailMarkdown = isUser
+          ? `**You**\n\n---\n\n${msg.content}`
+          : msg.content || (isThisStreaming ? "_thinking…_" : "");
+
+        const detailMetadata =
+          !isUser && !isThisStreaming ? (
+            <List.Item.Detail.Metadata>
+              {msg.model && (
+                <List.Item.Detail.Metadata.Label
+                  title="Model"
+                  text={msg.model}
+                />
+              )}
+              {msg.tokens !== undefined && (
+                <List.Item.Detail.Metadata.Label
+                  title="Tokens"
+                  text={msg.tokens.toLocaleString()}
+                />
+              )}
+              {msg.cost !== undefined && (
+                <List.Item.Detail.Metadata.Label
+                  title="Cost"
+                  text={`$${msg.cost.toFixed(5)}`}
+                />
+              )}
+              {hasTools && (
+                <>
+                  <List.Item.Detail.Metadata.Separator />
+                  <List.Item.Detail.Metadata.Label
+                    title="Tools used"
+                    text={msg.toolCalls!.join(", ")}
+                  />
+                </>
+              )}
+              {sessionStats?.contextUsage && (
+                <>
+                  <List.Item.Detail.Metadata.Separator />
+                  <List.Item.Detail.Metadata.Label
+                    title="Context window"
+                    text={`${sessionStats.contextUsage.percent}% used`}
+                  />
+                  <List.Item.Detail.Metadata.Label
+                    title="Session cost"
+                    text={`$${sessionStats.cost.toFixed(4)}`}
+                  />
+                </>
+              )}
+            </List.Item.Detail.Metadata>
+          ) : undefined;
+
+        return (
+          <List.Item
+            key={msg.id}
+            id={msg.id}
+            icon={
+              isUser
+                ? { source: Icon.Person, tintColor: Color.Blue }
+                : isThisStreaming
+                ? { source: Icon.CircleProgress, tintColor: Color.Green }
+                : { source: Icon.SpeechBubble, tintColor: Color.Purple }
+            }
+            title={title}
+            subtitle={subtitle}
+            accessories={accessories}
+            detail={
+              <List.Item.Detail
+                markdown={detailMarkdown}
+                metadata={detailMetadata}
+              />
+            }
+            actions={
+              <ActionPanel>
+                <ActionPanel.Section title="Message">
+                  <Action
+                    title={isStreaming ? "Abort" : "Send Message"}
+                    icon={isStreaming ? Icon.XMarkCircle : Icon.ArrowRight}
+                    onAction={isStreaming ? abortStreaming : sendMessage}
+                  />
+                  <Action.CopyToClipboard
+                    title="Copy Message"
+                    content={msg.content}
+                    shortcut={{ modifiers: ["cmd", "shift"], key: "c" }}
+                  />
+                  {isUser && (
+                    <Action
+                      title="Fork — Edit & Retry"
+                      icon={Icon.ArrowNe}
+                      onAction={() => handleFork(msg)}
+                      shortcut={{ modifiers: ["cmd"], key: "f" }}
+                    />
+                  )}
+                </ActionPanel.Section>
+                {modelSection}
+                {sessionSection}
+              </ActionPanel>
+            }
+          />
+        );
+      })}
     </List>
   );
 }
