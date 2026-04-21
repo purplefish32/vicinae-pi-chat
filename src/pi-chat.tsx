@@ -12,7 +12,7 @@ import {
   updateCommandMetadata,
   LaunchProps,
 } from "@vicinae/api";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { spawn, ChildProcess, execSync } from "child_process";
 import { StringDecoder } from "string_decoder";
 import * as os from "os";
@@ -696,7 +696,7 @@ export default function PiChat(props: LaunchProps) {
 
   // ── Shared action panel sections ──────────────────────────────────────────
 
-  const modelSection = availableModels.length > 0 && (
+  const modelSection = useMemo(() => availableModels.length > 0 && (
     <ActionPanel.Section title="Switch Model">
       {availableModels.map((m) => (
         <Action
@@ -711,9 +711,9 @@ export default function PiChat(props: LaunchProps) {
         />
       ))}
     </ActionPanel.Section>
-  );
+  ), [availableModels, currentModel, handleSwitchModel]);
 
-  const sessionSection = (
+  const sessionSection = useMemo(() => (
     <ActionPanel.Section title="Session">
       <Action
         title={`Thinking: ${thinkingLevel} ${THINKING_ICONS[thinkingLevel]}`}
@@ -755,9 +755,101 @@ export default function PiChat(props: LaunchProps) {
         shortcut={{ modifiers: ["cmd", "shift"], key: "delete" }}
       />
     </ActionPanel.Section>
-  );
+  ), [thinkingLevel, contextWarning, contextPercent, handleCycleThinking, handleCompact, handleAskClipboard, handleNewSession, isStreaming, abortStreaming]);
 
   // ── Crash screen ──────────────────────────────────────────────────────────
+
+  const messageItems = useMemo(() => messages.map((msg) => {
+    const isUser = msg.role === "user";
+    const isThisStreaming = msg.isStreaming;
+    const hasTools = (msg.toolCalls?.length ?? 0) > 0;
+    const rawContent = msg.content || (isThisStreaming ? "thinking…" : "");
+    const title = rawContent.length > 80 ? rawContent.slice(0, 77) + "…" : rawContent;
+
+    let subtitle = "";
+    if (isThisStreaming && activeToolCalls.length > 0) {
+      subtitle = `🔧 ${activeToolCalls.join(", ")}`;
+    } else if (isThisStreaming) {
+      subtitle = "●●●";
+    } else if (hasTools && !isUser) {
+      subtitle = msg.toolCalls!.join(", ");
+    }
+
+    const accessories = isUser
+      ? [{ tag: { value: "You", color: Color.Blue } }]
+      : isThisStreaming
+      ? [{ tag: { value: "●●●", color: Color.Green } }]
+      : [
+          ...(msg.cost !== undefined ? [{ tag: { value: `$${msg.cost.toFixed(4)}`, color: Color.SecondaryText } }] : []),
+          { tag: { value: "Pi", color: Color.Purple } },
+        ];
+
+    const detailMarkdown = isUser
+      ? `**You**\n\n---\n\n${msg.content}`
+      : msg.content || (isThisStreaming ? "_thinking…_" : "");
+
+    const detailMetadata = !isUser && !isThisStreaming ? (
+      <List.Item.Detail.Metadata>
+        {msg.model && <List.Item.Detail.Metadata.Label title="Model" text={msg.model} />}
+        {msg.tokens !== undefined && <List.Item.Detail.Metadata.Label title="Tokens" text={msg.tokens.toLocaleString()} />}
+        {msg.cost !== undefined && <List.Item.Detail.Metadata.Label title="Cost" text={`$${msg.cost.toFixed(5)}`} />}
+        {hasTools && <>
+          <List.Item.Detail.Metadata.Separator />
+          <List.Item.Detail.Metadata.Label title="Tools used" text={msg.toolCalls!.join(", ")} />
+        </>}
+        {sessionStats?.contextUsage && <>
+          <List.Item.Detail.Metadata.Separator />
+          <List.Item.Detail.Metadata.Label title="Context window" text={`${sessionStats.contextUsage.percent}% used`} />
+          <List.Item.Detail.Metadata.Label title="Session cost" text={`$${sessionStats.cost.toFixed(4)}`} />
+        </>}
+      </List.Item.Detail.Metadata>
+    ) : undefined;
+
+    return (
+      <List.Item
+        key={msg.id}
+        id={msg.id}
+        icon={
+          isUser
+            ? { source: Icon.Person, tintColor: Color.Blue }
+            : isThisStreaming
+            ? { source: Icon.CircleProgress, tintColor: Color.Green }
+            : { source: Icon.SpeechBubble, tintColor: Color.Purple }
+        }
+        title={title}
+        subtitle={subtitle}
+        accessories={accessories}
+        detail={<List.Item.Detail markdown={detailMarkdown} metadata={detailMetadata} />}
+        actions={
+          <ActionPanel>
+            <ActionPanel.Section title="Message">
+              <Action
+                title={isStreaming ? "Abort" : "Send Message"}
+                icon={isStreaming ? Icon.XMarkCircle : Icon.ArrowRight}
+                onAction={isStreaming ? abortStreaming : sendMessage}
+              />
+              <Action.CopyToClipboard
+                title="Copy Message"
+                content={msg.content}
+                shortcut={{ modifiers: ["cmd", "shift"], key: "c" }}
+              />
+              {isUser && (
+                <Action
+                  title="Fork — Edit & Retry"
+                  icon={Icon.ArrowNe}
+                  onAction={() => handleFork(msg)}
+                  shortcut={{ modifiers: ["cmd"], key: "f" }}
+                />
+              )}
+            </ActionPanel.Section>
+            {modelSection}
+            {sessionSection}
+          </ActionPanel>
+        }
+      />
+    );
+  }), [messages, isStreaming, activeToolCalls, sessionStats, modelSection, sessionSection, handleFork, sendMessage, abortStreaming]);
+
 
   if (crashed) {
     return (
@@ -855,141 +947,7 @@ export default function PiChat(props: LaunchProps) {
       )}
 
       {/* ── Message list ── */}
-      {messages.map((msg) => {
-        const isUser = msg.role === "user";
-        const isThisStreaming = msg.isStreaming;
-        const hasTools = (msg.toolCalls?.length ?? 0) > 0;
-
-        const rawContent = msg.content || (isThisStreaming ? "thinking…" : "");
-        const title =
-          rawContent.length > 80 ? rawContent.slice(0, 77) + "…" : rawContent;
-
-        let subtitle = "";
-        if (isThisStreaming && activeToolCalls.length > 0) {
-          subtitle = `🔧 ${activeToolCalls.join(", ")}`;
-        } else if (isThisStreaming) {
-          subtitle = "●●●";
-        } else if (hasTools && !isUser) {
-          subtitle = msg.toolCalls!.join(", ");
-        }
-
-        const accessories = isUser
-          ? [{ tag: { value: "You", color: Color.Blue } }]
-          : isThisStreaming
-          ? [{ tag: { value: "●●●", color: Color.Green } }]
-          : [
-              ...(msg.cost !== undefined
-                ? [
-                    {
-                      tag: {
-                        value: `$${msg.cost.toFixed(4)}`,
-                        color: Color.SecondaryText,
-                      },
-                    },
-                  ]
-                : []),
-              { tag: { value: "Pi", color: Color.Purple } },
-            ];
-
-        const detailMarkdown = isUser
-          ? `**You**\n\n---\n\n${msg.content}`
-          : msg.content || (isThisStreaming ? "_thinking…_" : "");
-
-        const detailMetadata =
-          !isUser && !isThisStreaming ? (
-            <List.Item.Detail.Metadata>
-              {msg.model && (
-                <List.Item.Detail.Metadata.Label
-                  title="Model"
-                  text={msg.model}
-                />
-              )}
-              {msg.tokens !== undefined && (
-                <List.Item.Detail.Metadata.Label
-                  title="Tokens"
-                  text={msg.tokens.toLocaleString()}
-                />
-              )}
-              {msg.cost !== undefined && (
-                <List.Item.Detail.Metadata.Label
-                  title="Cost"
-                  text={`$${msg.cost.toFixed(5)}`}
-                />
-              )}
-              {hasTools && (
-                <>
-                  <List.Item.Detail.Metadata.Separator />
-                  <List.Item.Detail.Metadata.Label
-                    title="Tools used"
-                    text={msg.toolCalls!.join(", ")}
-                  />
-                </>
-              )}
-              {sessionStats?.contextUsage && (
-                <>
-                  <List.Item.Detail.Metadata.Separator />
-                  <List.Item.Detail.Metadata.Label
-                    title="Context window"
-                    text={`${sessionStats.contextUsage.percent}% used`}
-                  />
-                  <List.Item.Detail.Metadata.Label
-                    title="Session cost"
-                    text={`$${sessionStats.cost.toFixed(4)}`}
-                  />
-                </>
-              )}
-            </List.Item.Detail.Metadata>
-          ) : undefined;
-
-        return (
-          <List.Item
-            key={msg.id}
-            id={msg.id}
-            icon={
-              isUser
-                ? { source: Icon.Person, tintColor: Color.Blue }
-                : isThisStreaming
-                ? { source: Icon.CircleProgress, tintColor: Color.Green }
-                : { source: Icon.SpeechBubble, tintColor: Color.Purple }
-            }
-            title={title}
-            subtitle={subtitle}
-            accessories={accessories}
-            detail={
-              <List.Item.Detail
-                markdown={detailMarkdown}
-                metadata={detailMetadata}
-              />
-            }
-            actions={
-              <ActionPanel>
-                <ActionPanel.Section title="Message">
-                  <Action
-                    title={isStreaming ? "Abort" : "Send Message"}
-                    icon={isStreaming ? Icon.XMarkCircle : Icon.ArrowRight}
-                    onAction={isStreaming ? abortStreaming : sendMessage}
-                  />
-                  <Action.CopyToClipboard
-                    title="Copy Message"
-                    content={msg.content}
-                    shortcut={{ modifiers: ["cmd", "shift"], key: "c" }}
-                  />
-                  {isUser && (
-                    <Action
-                      title="Fork — Edit & Retry"
-                      icon={Icon.ArrowNe}
-                      onAction={() => handleFork(msg)}
-                      shortcut={{ modifiers: ["cmd"], key: "f" }}
-                    />
-                  )}
-                </ActionPanel.Section>
-                {modelSection}
-                {sessionSection}
-              </ActionPanel>
-            }
-          />
-        );
-      })}
+      {messageItems}
     </List>
   );
 }
