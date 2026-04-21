@@ -88,7 +88,7 @@ function extractToolCallNames(content: unknown[]): string[] {
 // ── RPC Client ────────────────────────────────────────────────────────────────
 
 function createPiClient(cwd: string) {
-  const proc: ChildProcess = spawn("pi", ["--mode", "rpc"], {
+  const proc: ChildProcess = spawn("pi", ["--mode", "rpc", "--continue"], {
     cwd,
     stdio: ["pipe", "pipe", "pipe"],
   });
