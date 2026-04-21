@@ -9,6 +9,8 @@ import {
   Toast,
   getPreferenceValues,
   Clipboard,
+  updateCommandMetadata,
+  LaunchProps,
 } from "@vicinae/api";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { spawn, ChildProcess, execSync } from "child_process";
@@ -20,6 +22,7 @@ import * as fs from "fs";
 
 interface Message {
   id: string;
+  entryId?: string; // pi session entry ID, used for forking
   role: "user" | "assistant";
   content: string;
   isStreaming?: boolean;
@@ -55,6 +58,32 @@ const THINKING_ICONS: Record<ThinkingLevel, string> = {
   medium: "🧠🧠",
   high: "🧠🧠🧠",
 };
+
+// ── Message parsing helpers ───────────────────────────────────────────────────
+
+function extractUserText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((c: Record<string, unknown>) => c.type === "text")
+      .map((c: Record<string, unknown>) => c.text as string)
+      .join("\n\n");
+  }
+  return String(content ?? "");
+}
+
+function extractAssistantText(content: unknown[]): string {
+  return content
+    .filter((c: Record<string, unknown>) => c.type === "text")
+    .map((c: Record<string, unknown>) => c.text as string)
+    .join("\n\n");
+}
+
+function extractToolCallNames(content: unknown[]): string[] {
+  return content
+    .filter((c: Record<string, unknown>) => c.type === "toolCall")
+    .map((c: Record<string, unknown>) => c.name as string);
+}
 
 // ── RPC Client ────────────────────────────────────────────────────────────────
 
@@ -142,6 +171,7 @@ function createPiClient(cwd: string) {
     prompt: (message: string) => sendCommand({ type: "prompt", message }),
     abort: () => sendCommand({ type: "abort" }),
     newSession: () => sendCommand({ type: "new_session" }),
+    getMessages: () => sendCommand({ type: "get_messages" }),
     getAvailableModels: () => sendCommand({ type: "get_available_models" }),
     setModel: (provider: string, modelId: string) =>
       sendCommand({ type: "set_model", provider, modelId }),
@@ -150,6 +180,8 @@ function createPiClient(cwd: string) {
     setThinkingLevel: (level: string) =>
       sendCommand({ type: "set_thinking_level", level }),
     compact: () => sendCommand({ type: "compact" }),
+    getForkMessages: () => sendCommand({ type: "get_fork_messages" }),
+    fork: (entryId: string) => sendCommand({ type: "fork", entryId }),
     onEvent: (cb: (event: Record<string, unknown>) => void) => {
       eventListeners.push(cb);
       return () => {
@@ -169,14 +201,65 @@ function createPiClient(cwd: string) {
   };
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function setSubtitle(text: string) {
+  updateCommandMetadata({ subtitle: text }).catch(() => {});
+}
+
+function loadMessagesFromRpc(
+  rawMessages: Record<string, unknown>[]
+): Message[] {
+  const result: Message[] = [];
+  let idx = 0;
+
+  for (const msg of rawMessages) {
+    const role = msg.role as string;
+    if (role === "user") {
+      const text = extractUserText(msg.content);
+      if (text.trim()) {
+        result.push({
+          id: `loaded-${idx++}`,
+          role: "user",
+          content: text,
+          timestamp: (msg.timestamp as number) ?? Date.now(),
+        });
+      }
+    } else if (role === "assistant") {
+      const content = msg.content as Record<string, unknown>[];
+      const text = extractAssistantText(content);
+      const toolCalls = extractToolCallNames(content);
+      const usage = msg.usage as Record<string, unknown> | undefined;
+      const cost = usage?.cost as Record<string, unknown> | undefined;
+
+      if (text.trim() || toolCalls.length > 0) {
+        result.push({
+          id: `loaded-${idx++}`,
+          role: "assistant",
+          content: text,
+          toolCalls,
+          model: msg.model as string | undefined,
+          tokens: usage
+            ? ((usage.input as number) ?? 0) + ((usage.output as number) ?? 0)
+            : undefined,
+          cost: cost?.total as number | undefined,
+          timestamp: (msg.timestamp as number) ?? Date.now(),
+        });
+      }
+    }
+  }
+
+  return result;
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
 
-export default function PiChat() {
+export default function PiChat(props: LaunchProps) {
   const prefs = getPreferenceValues<Preferences>();
   const cwd = prefs.workingDirectory?.trim() || os.homedir();
 
   const [messages, setMessages] = useState<Message[]>([]);
-  const [searchText, setSearchText] = useState("");
+  const [searchText, setSearchText] = useState(props.fallbackText ?? "");
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeToolCalls, setActiveToolCalls] = useState<string[]>([]);
   const [piReady, setPiReady] = useState(false);
@@ -193,7 +276,6 @@ export default function PiChat() {
   // ── Bootstrap ──────────────────────────────────────────────────────────────
 
   const startClient = useCallback(() => {
-    // Validate working directory
     if (!fs.existsSync(cwd)) {
       showToast({
         style: Toast.Style.Failure,
@@ -208,26 +290,37 @@ export default function PiChat() {
     setCrashed(null);
     setPiReady(false);
 
-    // Detect readiness via get_state — no blind timer
+    // Handshake: get_state → get_available_models → get_messages
     client
       .getState()
       .then((res) => {
         const data = res.data as Record<string, unknown>;
-        setPiReady(true);
-        if (data?.model) setCurrentModel(data.model as Model);
-        if (data?.thinkingLevel)
-          setThinkingLevel(data.thinkingLevel as ThinkingLevel);
+        const model = data?.model as Model | null;
+        const level = data?.thinkingLevel as ThinkingLevel | undefined;
+        if (model) {
+          setCurrentModel(model);
+          setSubtitle(model.name);
+        }
+        if (level) setThinkingLevel(level);
         return client.getAvailableModels();
       })
       .then((res) => {
         const data = res.data as Record<string, unknown>;
         setAvailableModels((data?.models as Model[]) ?? []);
+        return client.getMessages();
+      })
+      .then((res) => {
+        const data = res.data as Record<string, unknown>;
+        const raw = (data?.messages as Record<string, unknown>[]) ?? [];
+        const loaded = loadMessagesFromRpc(raw);
+        if (loaded.length > 0) setMessages(loaded);
+        setPiReady(true);
       })
       .catch(() => {
-        // pi may have exited before responding — close handler will show error
+        // Process may have exited — close handler will show error
       });
 
-    // Subscribe to events
+    // Event stream
     const unsub = client.onEvent((event) => {
       const type = event.type as string;
 
@@ -272,9 +365,15 @@ export default function PiChat() {
         const msgs = (event.messages ?? []) as Record<string, unknown>[];
         const lastAssistant = [...msgs]
           .reverse()
-          .find((m) => m.role === "assistant") as Record<string, unknown> | undefined;
-        const usage = lastAssistant?.usage as Record<string, unknown> | undefined;
+          .find((m) => m.role === "assistant") as
+          | Record<string, unknown>
+          | undefined;
+        const usage = lastAssistant?.usage as
+          | Record<string, unknown>
+          | undefined;
         const cost = usage?.cost as Record<string, unknown> | undefined;
+        const totalCost = cost?.total as number | undefined;
+        const modelName = lastAssistant?.model as string | undefined;
 
         streamingIdRef.current = null;
         setIsStreaming(false);
@@ -288,37 +387,45 @@ export default function PiChat() {
               {
                 ...last,
                 isStreaming: false,
-                model: lastAssistant?.model as string | undefined,
+                model: modelName,
                 tokens: usage
                   ? ((usage.input as number) ?? 0) +
                     ((usage.output as number) ?? 0)
                   : undefined,
-                cost: cost?.total as number | undefined,
+                cost: totalCost,
               },
             ];
           }
           return prev;
         });
 
-        // Refresh session stats
-        client
-          .getSessionStats()
-          .then((res) => {
-            setSessionStats(res.data as unknown as SessionStats);
-          })
-          .catch(() => {});
+        // Update subtitle with cost
+        client.getSessionStats().then((res) => {
+          const stats = res.data as unknown as SessionStats;
+          setSessionStats(stats);
+          const label = [
+            currentModel?.name ?? modelName,
+            stats.cost !== undefined ? `$${stats.cost.toFixed(4)}` : null,
+            stats.contextUsage
+              ? `ctx ${stats.contextUsage.percent}%`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          setSubtitle(label);
+        }).catch(() => {});
       }
     });
 
     unsubRef.current = unsub;
 
-    // Handle process errors
     client.proc.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "ENOENT") {
         showToast({
           style: Toast.Style.Failure,
           title: "pi not found",
-          message: "Install pi: https://github.com/mariozechner/pi-coding-agent",
+          message:
+            "Install pi: https://github.com/mariozechner/pi-coding-agent",
         });
       } else {
         showToast({
@@ -329,23 +436,22 @@ export default function PiChat() {
       }
     });
 
-    // Handle process crash / unexpected exit
     client.proc.on("close", (code) => {
       if (code !== 0 && code !== null) {
         const stderr = client.getStderr().trim();
         const hint = stderr.includes("API key")
-          ? "No API key configured. Run `pi` in your terminal to set one up."
+          ? "No API key configured. Run `pi` in a terminal to set one up."
           : stderr || `Exited with code ${code}`;
         setCrashed(hint);
         setPiReady(false);
         setIsStreaming(false);
         setActiveToolCalls([]);
+        setSubtitle("crashed");
       }
     });
   }, [cwd]);
 
   useEffect(() => {
-    // Check pi is installed first
     try {
       execSync("which pi", { stdio: "ignore" });
     } catch {
@@ -364,6 +470,14 @@ export default function PiChat() {
       clientRef.current?.destroy();
     };
   }, [startClient]);
+
+  // Auto-send when launched as a fallback command
+  useEffect(() => {
+    if (props.fallbackText && piReady && !isStreaming) {
+      sendMessage(props.fallbackText);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [piReady]);
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -390,6 +504,7 @@ export default function PiChat() {
       ]);
       setSearchText("");
       setIsStreaming(true);
+      setSubtitle("streaming…");
 
       clientRef.current.prompt(msg);
     },
@@ -414,6 +529,56 @@ export default function PiChat() {
       }
       return prev;
     });
+    setSubtitle(currentModel?.name ?? "Pi");
+  }, [currentModel]);
+
+  const handleFork = useCallback(async (msg: Message) => {
+    if (!clientRef.current) return;
+
+    const toast = await showToast({
+      style: Toast.Style.Animated,
+      title: "Forking conversation…",
+    });
+
+    try {
+      const res = await clientRef.current.getForkMessages();
+      const forkable = (
+        (res.data as Record<string, unknown>)?.messages ?? []
+      ) as { entryId: string; text: string }[];
+
+      const match = forkable.find((f) => f.text === msg.content);
+      if (!match) {
+        toast.style = Toast.Style.Failure;
+        toast.title = "This message can't be forked";
+        return;
+      }
+
+      const result = await clientRef.current.fork(match.entryId);
+      const resultData = result.data as Record<string, unknown>;
+
+      if (resultData?.cancelled) {
+        toast.style = Toast.Style.Failure;
+        toast.title = "Fork was cancelled";
+        return;
+      }
+
+      // Remove the forked message and everything after it
+      setMessages((prev) => {
+        const idx = prev.findIndex((m) => m.id === msg.id);
+        return idx >= 0 ? prev.slice(0, idx) : prev;
+      });
+
+      // Pre-fill search bar with original text so user can edit and resend
+      setSearchText(msg.content);
+
+      toast.style = Toast.Style.Success;
+      toast.title = "Forked — edit your message and press ↵";
+    } catch (err) {
+      toast.style = Toast.Style.Failure;
+      toast.title = "Fork failed";
+      toast.message =
+        err instanceof Error ? err.message : "Unknown error";
+    }
   }, []);
 
   const handleNewSession = useCallback(async () => {
@@ -424,6 +589,7 @@ export default function PiChat() {
       setIsStreaming(false);
       setActiveToolCalls([]);
       setSessionStats(null);
+      setSubtitle(currentModel?.name ?? "Pi");
       showToast({ style: Toast.Style.Success, title: "New session started" });
     } catch {
       showToast({
@@ -431,21 +597,16 @@ export default function PiChat() {
         title: "Failed to start new session",
       });
     }
-  }, [isStreaming]);
+  }, [isStreaming, currentModel]);
 
   const handleSwitchModel = useCallback(async (model: Model) => {
     try {
       await clientRef.current?.setModel(model.provider, model.id);
       setCurrentModel(model);
-      showToast({
-        style: Toast.Style.Success,
-        title: `Switched to ${model.name}`,
-      });
+      setSubtitle(model.name);
+      showToast({ style: Toast.Style.Success, title: `Switched to ${model.name}` });
     } catch {
-      showToast({
-        style: Toast.Style.Failure,
-        title: "Failed to switch model",
-      });
+      showToast({ style: Toast.Style.Failure, title: "Failed to switch model" });
     }
   }, []);
 
@@ -460,10 +621,7 @@ export default function PiChat() {
         title: `Thinking: ${next} ${THINKING_ICONS[next]}`,
       });
     } catch {
-      showToast({
-        style: Toast.Style.Failure,
-        title: "Failed to set thinking level",
-      });
+      showToast({ style: Toast.Style.Failure, title: "Failed to set thinking level" });
     }
   }, [thinkingLevel]);
 
@@ -506,14 +664,13 @@ export default function PiChat() {
   // ── Derived state ─────────────────────────────────────────────────────────
 
   const contextPercent = sessionStats?.contextUsage?.percent;
-  const contextWarning =
-    contextPercent !== undefined && contextPercent > 70;
+  const contextWarning = contextPercent !== undefined && contextPercent > 70;
   const isEmpty = messages.length === 0;
 
   const statusLine = piReady
     ? [
         currentModel?.name,
-        `thinking: ${THINKING_ICONS[thinkingLevel]} ${thinkingLevel}`,
+        `${THINKING_ICONS[thinkingLevel]} ${thinkingLevel}`,
         contextPercent !== undefined
           ? `ctx: ${contextPercent}%${contextWarning ? " ⚠️" : ""}`
           : null,
@@ -646,11 +803,7 @@ export default function PiChat() {
               },
             },
           ]}
-          detail={
-            <List.Item.Detail
-              markdown={`**You:** ${searchText}`}
-            />
-          }
+          detail={<List.Item.Detail markdown={`**You:** ${searchText}`} />}
           actions={
             <ActionPanel>
               <Action
@@ -695,14 +848,10 @@ export default function PiChat() {
         const isThisStreaming = msg.isStreaming;
         const hasTools = (msg.toolCalls?.length ?? 0) > 0;
 
-        // Truncated title for list column
         const rawContent = msg.content || (isThisStreaming ? "thinking…" : "");
         const title =
-          rawContent.length > 80
-            ? rawContent.slice(0, 77) + "…"
-            : rawContent;
+          rawContent.length > 80 ? rawContent.slice(0, 77) + "…" : rawContent;
 
-        // Subtitle
         let subtitle = "";
         if (isThisStreaming && activeToolCalls.length > 0) {
           subtitle = `🔧 ${activeToolCalls.join(", ")}`;
@@ -712,7 +861,6 @@ export default function PiChat() {
           subtitle = msg.toolCalls!.join(", ");
         }
 
-        // Accessories
         const accessories = isUser
           ? [{ tag: { value: "You", color: Color.Blue } }]
           : isThisStreaming
@@ -731,12 +879,10 @@ export default function PiChat() {
               { tag: { value: "Pi", color: Color.Purple } },
             ];
 
-        // Full markdown for detail pane
         const detailMarkdown = isUser
           ? `**You**\n\n---\n\n${msg.content}`
           : msg.content || (isThisStreaming ? "_thinking…_" : "");
 
-        // Metadata for assistant messages
         const detailMetadata =
           !isUser && !isThisStreaming ? (
             <List.Item.Detail.Metadata>
@@ -816,6 +962,14 @@ export default function PiChat() {
                     content={msg.content}
                     shortcut={{ modifiers: ["cmd", "shift"], key: "c" }}
                   />
+                  {isUser && (
+                    <Action
+                      title="Fork — Edit & Retry"
+                      icon={Icon.ArrowNe}
+                      onAction={() => handleFork(msg)}
+                      shortcut={{ modifiers: ["cmd"], key: "f" }}
+                    />
+                  )}
                 </ActionPanel.Section>
                 {modelSection}
                 {sessionSection}

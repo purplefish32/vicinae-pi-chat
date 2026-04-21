@@ -14,7 +14,8 @@
       "name": "pi-chat",
       "title": "Chat",
       "description": "Start a conversation with the pi coding agent",
-      "mode": "view"
+      "mode": "view",
+      "keywords": ["pi", "ai", "chat", "ask", "code"]
     }
   ],
   "preferences": [
