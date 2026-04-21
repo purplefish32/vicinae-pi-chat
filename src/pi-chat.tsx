@@ -259,7 +259,9 @@ export default function PiChat(props: LaunchProps) {
   const cwd = prefs.workingDirectory?.trim() || os.homedir();
 
   const [messages, setMessages] = useState<Message[]>([]);
-  const [searchText, setSearchText] = useState(props.fallbackText ?? "");
+  const [searchText, setSearchText] = useState("");
+  const [listKey, setListKey] = useState(0);
+  const searchTextRef = useRef(props.fallbackText ?? "");
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeToolCalls, setActiveToolCalls] = useState<string[]>([]);
   const [piReady, setPiReady] = useState(false);
@@ -476,7 +478,7 @@ export default function PiChat(props: LaunchProps) {
 
   const sendMessage = useCallback(
     (text?: string) => {
-      const msg = (text ?? searchText).trim();
+      const msg = (text ?? searchTextRef.current).trim();
       if (!msg || !piReady || isStreaming || !clientRef.current) return;
 
       const userId = `user-${Date.now()}`;
@@ -495,13 +497,15 @@ export default function PiChat(props: LaunchProps) {
           timestamp: Date.now(),
         },
       ]);
+      setListKey((k) => k + 1);
+      searchTextRef.current = "";
       setSearchText("");
       setIsStreaming(true);
       setSubtitle("streaming…");
 
       clientRef.current.prompt(msg);
     },
-    [searchText, piReady, isStreaming]
+    [piReady, isStreaming]
   );
 
   const abortStreaming = useCallback(() => {
@@ -765,11 +769,11 @@ export default function PiChat(props: LaunchProps) {
 
   return (
     <List
+      key={listKey}
       isLoading={!piReady}
       isShowingDetail={!isEmpty}
       filtering={false}
-      searchText={searchText}
-      onSearchTextChange={setSearchText}
+      onSearchTextChange={(v) => { searchTextRef.current = v; setSearchText(v); }}
       searchBarPlaceholder={
         isStreaming
           ? activeToolCalls.length > 0
