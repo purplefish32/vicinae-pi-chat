@@ -794,7 +794,7 @@ export default function PiChat(props: LaunchProps) {
           ? activeToolCalls.length > 0
             ? `🔧 Running: ${activeToolCalls.join(", ")}…`
             : "Pi is thinking…"
-          : statusLine
+          : "Ask pi anything… (↵ to send)"
       }
     >
       {/* ── Send / Abort item — always first when typing ── */}
