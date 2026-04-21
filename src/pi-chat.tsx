@@ -293,6 +293,7 @@ export default function PiChat(props: LaunchProps) {
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("off");
   const [sessionStats, setSessionStats] = useState<SessionStats | null>(null);
   const [sessionName, setSessionName] = useState<string | null>(null);
+  const sessionNameRef = useRef<string | null>(null);
 
   const clientRef = useRef<ReturnType<typeof createPiClient> | null>(null);
   const streamingIdRef = useRef<string | null>(null);
@@ -327,7 +328,7 @@ export default function PiChat(props: LaunchProps) {
         }
         if (level) setThinkingLevel(level);
         const name = data?.sessionName as string | undefined;
-        if (name) setSessionName(name);
+        if (name) { setSessionName(name); sessionNameRef.current = name; }
         return client.getAvailableModels();
       })
       .then((res) => {
@@ -422,11 +423,11 @@ export default function PiChat(props: LaunchProps) {
         client.getSessionStats().then((res) => {
           const stats = res.data as unknown as SessionStats;
           setSessionStats(stats);
-          const label = sessionName ? `"${sessionName}"` : "Continue conversation";
+          const label = sessionNameRef.current ? `"${sessionNameRef.current}"` : "Continue conversation";
           setSubtitle(label);
           // Persist messages after each completed response
           setMessages((prev) => {
-            saveMessages(prev, sessionName).catch(() => {});
+            saveMessages(prev, sessionNameRef.current).catch(() => {});
             return prev;
           });
         }).catch(() => {});
@@ -484,6 +485,7 @@ export default function PiChat(props: LaunchProps) {
       if (messages.length > 0) setMessages(messages);
       if (storedName) {
         setSessionName(storedName);
+        sessionNameRef.current = storedName;
         setSubtitle(`"${storedName}" · Continue conversation`);
       } else {
         setSubtitle("Continue conversation");
@@ -536,11 +538,12 @@ export default function PiChat(props: LaunchProps) {
       setSubtitle("streaming…");
 
       // Auto-name session from first user message
-      if (messages.length === 0 && !sessionName) {
+      if (messages.length === 0 && !sessionNameRef.current) {
         const name = msg.length > 40 ? msg.slice(0, 37) + "…" : msg;
         clientRef.current.setSessionName(name)
           .then(() => {
             setSessionName(name);
+            sessionNameRef.current = name;
             LocalStorage.setItem(STORAGE_SESSION_NAME_KEY, name).catch(() => {});
           })
           .catch(() => {});
@@ -630,6 +633,7 @@ export default function PiChat(props: LaunchProps) {
       setActiveToolCalls([]);
       setSessionStats(null);
       setSessionName(null);
+      sessionNameRef.current = null;
       setSubtitle("Continue conversation");
       LocalStorage.removeItem(STORAGE_MESSAGES_KEY).catch(() => {});
       LocalStorage.removeItem(STORAGE_SESSION_NAME_KEY).catch(() => {});
