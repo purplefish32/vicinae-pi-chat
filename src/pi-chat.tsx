@@ -11,6 +11,7 @@ import {
   Clipboard,
   updateCommandMetadata,
   LaunchProps,
+  LocalStorage,
 } from "@vicinae/api";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { spawn, ChildProcess, execSync } from "child_process";
@@ -206,6 +207,27 @@ function createPiClient(cwd: string) {
 
 function setSubtitle(text: string) {
   updateCommandMetadata({ subtitle: text }).catch(() => {});
+  LocalStorage.setItem("subtitle", text).catch(() => {});
+}
+
+const STORAGE_MESSAGES_KEY = "last_messages";
+const STORAGE_SESSION_NAME_KEY = "session_name";
+const MAX_STORED_MESSAGES = 20;
+
+async function saveMessages(messages: Message[], sessionName: string | null) {
+  await LocalStorage.setItem(STORAGE_MESSAGES_KEY, JSON.stringify(messages.slice(-MAX_STORED_MESSAGES)));
+  if (sessionName) await LocalStorage.setItem(STORAGE_SESSION_NAME_KEY, sessionName);
+}
+
+async function loadStoredMessages(): Promise<{ messages: Message[]; sessionName: string | null }> {
+  const raw = await LocalStorage.getItem<string>(STORAGE_MESSAGES_KEY);
+  const name = await LocalStorage.getItem<string>(STORAGE_SESSION_NAME_KEY);
+  try {
+    const messages = raw ? (JSON.parse(raw) as Message[]) : [];
+    return { messages, sessionName: name ?? null };
+  } catch {
+    return { messages: [], sessionName: null };
+  }
 }
 
 function loadMessagesFromRpc(
@@ -398,7 +420,7 @@ export default function PiChat(props: LaunchProps) {
           return prev;
         });
 
-        // Update subtitle with cost
+        // Update subtitle with cost and save messages
         client.getSessionStats().then((res) => {
           const stats = res.data as unknown as SessionStats;
           setSessionStats(stats);
@@ -413,6 +435,11 @@ export default function PiChat(props: LaunchProps) {
             .filter(Boolean)
             .join(" · ");
           setSubtitle(label);
+          // Persist messages after each completed response
+          setMessages((prev) => {
+            saveMessages(prev, sessionName).catch(() => {});
+            return prev;
+          });
         }).catch(() => {});
       }
     });
@@ -463,6 +490,15 @@ export default function PiChat(props: LaunchProps) {
       return;
     }
 
+    // Restore persisted messages + session name + subtitle
+    loadStoredMessages().then(({ messages, sessionName: storedName }) => {
+      if (messages.length > 0) setMessages(messages);
+      if (storedName) setSessionName(storedName);
+    });
+    LocalStorage.getItem<string>("subtitle").then((s) => {
+      if (s) updateCommandMetadata({ subtitle: s }).catch(() => {});
+    });
+
     startClient();
 
     return () => {
@@ -512,7 +548,10 @@ export default function PiChat(props: LaunchProps) {
       if (messages.length === 0 && !sessionName) {
         const name = msg.length > 40 ? msg.slice(0, 37) + "…" : msg;
         clientRef.current.setSessionName(name)
-          .then(() => setSessionName(name))
+          .then(() => {
+            setSessionName(name);
+            LocalStorage.setItem(STORAGE_SESSION_NAME_KEY, name).catch(() => {});
+          })
           .catch(() => {});
       }
 
@@ -601,6 +640,9 @@ export default function PiChat(props: LaunchProps) {
       setSessionStats(null);
       setSessionName(null);
       setSubtitle(currentModel?.name ?? "Pi");
+      LocalStorage.removeItem(STORAGE_MESSAGES_KEY).catch(() => {});
+      LocalStorage.removeItem(STORAGE_SESSION_NAME_KEY).catch(() => {});
+      LocalStorage.removeItem("subtitle").catch(() => {});
       showToast({ style: Toast.Style.Success, title: "New session started" });
     } catch {
       showToast({
