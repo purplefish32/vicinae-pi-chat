@@ -131,6 +131,19 @@ export default function PiChat() {
 
   // ── Init pi RPC process ──
   useEffect(() => {
+    // Check pi is installed before spawning
+    const { execSync } = require("child_process") as typeof import("child_process");
+    try {
+      execSync("which pi", { stdio: "ignore" });
+    } catch {
+      showToast({
+        style: Toast.Style.Failure,
+        title: "pi not found",
+        message: "Install pi first: https://github.com/mariozechner/pi-coding-agent",
+      });
+      return;
+    }
+
     const client = createPiClient(cwd);
     clientRef.current = client;
 
@@ -195,8 +208,20 @@ export default function PiChat() {
       }
     });
 
-    client.proc.on("error", () => {
-      showToast({ style: Toast.Style.Failure, title: "Pi process error" });
+    client.proc.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "ENOENT") {
+        showToast({
+          style: Toast.Style.Failure,
+          title: "pi not found",
+          message: "Install pi first: https://github.com/mariozechner/pi-coding-agent",
+        });
+      } else {
+        showToast({
+          style: Toast.Style.Failure,
+          title: "Pi process error",
+          message: err.message,
+        });
+      }
     });
 
     return () => {

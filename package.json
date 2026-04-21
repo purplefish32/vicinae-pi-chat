@@ -1,14 +1,14 @@
 {
   "$schema": "https://raw.githubusercontent.com/vicinaehq/vicinae/refs/heads/main/extra/schemas/extension.json",
   "name": "pi-chat",
-  "title": "Pi",
-  "description": "Chat with the pi coding agent",
+  "title": "Pi Coding Agent",
+  "description": "Chat with the pi coding agent — an AI assistant that can read, edit and run code on your system",
   "categories": ["Developer Tools", "Productivity"],
   "license": "MIT",
   "author": "purplefish32",
   "contributors": [],
   "pastContributors": [],
-  "icon": "icon.png",
+  "icon": "extension_icon.png",
   "commands": [
     {
       "name": "pi-chat",
