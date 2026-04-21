@@ -422,16 +422,7 @@ export default function PiChat(props: LaunchProps) {
         client.getSessionStats().then((res) => {
           const stats = res.data as unknown as SessionStats;
           setSessionStats(stats);
-          const label = [
-            sessionName ? `"${sessionName}"` : null,
-            currentModel?.name ?? modelName,
-            stats.cost !== undefined ? `$${stats.cost.toFixed(4)}` : null,
-            stats.contextUsage
-              ? `ctx ${stats.contextUsage.percent}%`
-              : null,
-          ]
-            .filter(Boolean)
-            .join(" · ");
+          const label = sessionName ? `"${sessionName}"` : "Continue conversation";
           setSubtitle(label);
           // Persist messages after each completed response
           setMessages((prev) => {
@@ -655,7 +646,7 @@ export default function PiChat(props: LaunchProps) {
     try {
       await clientRef.current?.setModel(model.provider, model.id);
       setCurrentModel(model);
-      setSubtitle(model.name);
+      setSubtitle(sessionName ? `"${sessionName}"` : "Continue conversation");
       showToast({ style: Toast.Style.Success, title: `Switched to ${model.name}` });
     } catch {
       showToast({ style: Toast.Style.Failure, title: "Failed to switch model" });
