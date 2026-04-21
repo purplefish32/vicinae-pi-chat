@@ -88,7 +88,7 @@ function extractToolCallNames(content: unknown[]): string[] {
 // ── RPC Client ────────────────────────────────────────────────────────────────
 
 function createPiClient(cwd: string) {
-  const proc: ChildProcess = spawn("pi", ["--mode", "rpc"], {
+  const proc: ChildProcess = spawn("pi", ["--mode", "rpc", "--continue"], {
     cwd,
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -182,6 +182,7 @@ function createPiClient(cwd: string) {
     compact: () => sendCommand({ type: "compact" }),
     getForkMessages: () => sendCommand({ type: "get_fork_messages" }),
     fork: (entryId: string) => sendCommand({ type: "fork", entryId }),
+    setSessionName: (name: string) => sendCommand({ type: "set_session_name", name }),
     onEvent: (cb: (event: Record<string, unknown>) => void) => {
       eventListeners.push(cb);
       return () => {
@@ -268,6 +269,7 @@ export default function PiChat(props: LaunchProps) {
   const [currentModel, setCurrentModel] = useState<Model | null>(null);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("off");
   const [sessionStats, setSessionStats] = useState<SessionStats | null>(null);
+  const [sessionName, setSessionName] = useState<string | null>(null);
 
   const clientRef = useRef<ReturnType<typeof createPiClient> | null>(null);
   const streamingIdRef = useRef<string | null>(null);
@@ -302,6 +304,8 @@ export default function PiChat(props: LaunchProps) {
           setSubtitle(model.name);
         }
         if (level) setThinkingLevel(level);
+        const name = data?.sessionName as string | undefined;
+        if (name) setSessionName(name);
         return client.getAvailableModels();
       })
       .then((res) => {
@@ -404,6 +408,7 @@ export default function PiChat(props: LaunchProps) {
           const stats = res.data as unknown as SessionStats;
           setSessionStats(stats);
           const label = [
+            sessionName ? `"${sessionName}"` : null,
             currentModel?.name ?? modelName,
             stats.cost !== undefined ? `$${stats.cost.toFixed(4)}` : null,
             stats.contextUsage
@@ -506,6 +511,12 @@ export default function PiChat(props: LaunchProps) {
       setIsStreaming(true);
       setSubtitle("streaming…");
 
+      // Auto-name session from first message
+      if (messages.length === 0 && !sessionName) {
+        const name = msg.length > 40 ? msg.slice(0, 37) + "…" : msg;
+        clientRef.current.setSessionName(name).then(() => setSessionName(name)).catch(() => {});
+      }
+
       clientRef.current.prompt(msg);
     },
     [searchText, piReady, isStreaming]
@@ -589,6 +600,7 @@ export default function PiChat(props: LaunchProps) {
       setIsStreaming(false);
       setActiveToolCalls([]);
       setSessionStats(null);
+      setSessionName(null);
       setSubtitle(currentModel?.name ?? "Pi");
       showToast({ style: Toast.Style.Success, title: "New session started" });
     } catch {
