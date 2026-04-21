@@ -207,7 +207,6 @@ function createPiClient(cwd: string) {
 
 function setSubtitle(text: string) {
   updateCommandMetadata({ subtitle: text }).catch(() => {});
-  LocalStorage.setItem("subtitle", text).catch(() => {});
 }
 
 const STORAGE_MESSAGES_KEY = "last_messages";
@@ -492,10 +491,12 @@ export default function PiChat(props: LaunchProps) {
     // Restore persisted messages + session name + subtitle
     loadStoredMessages().then(({ messages, sessionName: storedName }) => {
       if (messages.length > 0) setMessages(messages);
-      if (storedName) setSessionName(storedName);
-    });
-    LocalStorage.getItem<string>("subtitle").then((s) => {
-      setSubtitle(s ?? "Continue conversation");
+      if (storedName) {
+        setSessionName(storedName);
+        setSubtitle(`"${storedName}" · Continue conversation`);
+      } else {
+        setSubtitle("Continue conversation");
+      }
     });
 
     startClient();
@@ -641,7 +642,6 @@ export default function PiChat(props: LaunchProps) {
       setSubtitle("Continue conversation");
       LocalStorage.removeItem(STORAGE_MESSAGES_KEY).catch(() => {});
       LocalStorage.removeItem(STORAGE_SESSION_NAME_KEY).catch(() => {});
-      LocalStorage.removeItem("subtitle").catch(() => {});
       showToast({ style: Toast.Style.Success, title: "New session started" });
     } catch {
       showToast({
