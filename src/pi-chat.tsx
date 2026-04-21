@@ -325,7 +325,6 @@ export default function PiChat(props: LaunchProps) {
         const level = data?.thinkingLevel as ThinkingLevel | undefined;
         if (model) {
           setCurrentModel(model);
-          setSubtitle(model.name);
         }
         if (level) setThinkingLevel(level);
         const name = data?.sessionName as string | undefined;
@@ -496,7 +495,7 @@ export default function PiChat(props: LaunchProps) {
       if (storedName) setSessionName(storedName);
     });
     LocalStorage.getItem<string>("subtitle").then((s) => {
-      if (s) updateCommandMetadata({ subtitle: s }).catch(() => {});
+      setSubtitle(s ?? "Continue conversation");
     });
 
     startClient();
@@ -578,7 +577,7 @@ export default function PiChat(props: LaunchProps) {
       }
       return prev;
     });
-    setSubtitle(currentModel?.name ?? "Pi");
+    setSubtitle("Continue conversation");
   }, [currentModel]);
 
   const handleFork = useCallback(async (msg: Message) => {
@@ -639,7 +638,7 @@ export default function PiChat(props: LaunchProps) {
       setActiveToolCalls([]);
       setSessionStats(null);
       setSessionName(null);
-      setSubtitle(currentModel?.name ?? "Pi");
+      setSubtitle("Continue conversation");
       LocalStorage.removeItem(STORAGE_MESSAGES_KEY).catch(() => {});
       LocalStorage.removeItem(STORAGE_SESSION_NAME_KEY).catch(() => {});
       LocalStorage.removeItem("subtitle").catch(() => {});
