@@ -907,7 +907,7 @@ export default function PiChat(props: LaunchProps) {
               },
             },
           ]}
-          detail={<List.Item.Detail markdown={`**You:** ${searchText}`} />}
+          detail={<List.Item.Detail markdown="_Type your message in the search bar above_" />}
           actions={
             <ActionPanel>
               <Action
